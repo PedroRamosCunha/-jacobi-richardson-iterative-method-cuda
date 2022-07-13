@@ -1,132 +1,217 @@
+//////////////////////////////////////////////////////////////////////
+//                                                                  //
+//      Trabalho 2 - SSC0903 - Computação de alto desempenho        //
+//                                                                  //
+//      10716550 - Diego da Silva Parra                             //
+//      10691971 - Mateus Fernandes Doimo                           //
+//      10892248 - Pedro Ramos Cunha                                //
+//                                                                  //
+//////////////////////////////////////////////////////////////////////
+
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
-#include <omp.h>
+#include <unistd.h>
+#include <math.h>
 #include <mpi.h>
+#include <omp.h>
 
-float *varprev;
-float *vetorB;
-float *varcurr;
-float **matrizA;
-// int T;
-#define T 4
+#define ROOT 0
 
-// Valores pseudoaleatória
-float numRand()
+void input(int rank, double ***matrizA, double **vetorA, double **vetorB, int N);
+void verifica(int N, int no_procs, int rank);
+void interacoes(double *x_new, double *x_old, double *x_bloc, double *a_recv, double *b_recv, int no_linha_blocos, int N, int rank);
+void visualizar(int N, double **matrizA, double *vetorB, double *x, int rank);
+void solucao(int N, double **matrizA, double *vetorB, double *x, int rank);
+int check(double *x_old, double *x_new, int N);
+double numRand();
+double abs1(double x);
+
+int T = 0;
+int N = 0;
+int P = 0;
+
+int main(int argc, char *argv[])
 {
-    return ((rand() % 8) * (1.0));
-}
+    double tempo;
+    tempo = MPI_Wtime();
 
-// Retorna valor absoluto
-float abs1(float x)
-{
-    if (x > 0.0)
-        return x;
-    else
-        return x * (-1.0);
-}
+    N = atoi(argv[1]);
+    P = atoi(argv[2]);
+    T = atoi(argv[3]);
 
-// Condição de convergência, se a matriz A for diagonalmente dominante
-void diagonalmenteDominante(int N)
-{
+    int no_linha_blocos;
+    int no_procs, rank;
+    double **matrizA, *vetorA, *vetorB, *a_recv, *b_recv;
+    double *x_new, *x_old, *x_bloc;
+    int provided;
 
-    int i, j = 0;
-    float somaNaoDiagonalLinha, somaNaoDiagonalColuna = 0.0;
-    int flag1 = 0;
-    int flag2 = 0;
+    // Inicializar MPI
+    MPI_Init_thread(&argc, &argv, MPI_THREAD_MULTIPLE, &provided);
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &no_procs);
 
-    // Paralelizando apenas a execução das
-    //#pragma omp parallel for private(i) num_threads(T)
-    for (i = 0; i < N; i++)
+    input(rank, &matrizA, &vetorA, &vetorB, N);
+    verifica(N, no_procs, rank);
+
+    no_linha_blocos = N / no_procs;
+    x_new = (double *)malloc(N * sizeof(double));
+    x_old = (double *)malloc(N * sizeof(double));
+    x_bloc = (double *)malloc(no_linha_blocos * sizeof(double));
+    a_recv = (double *)malloc(no_linha_blocos * N * sizeof(double));
+    b_recv = (double *)malloc(no_linha_blocos * N * sizeof(double));
+    MPI_Scatter(vetorA, no_linha_blocos * N, MPI_DOUBLE, a_recv, no_linha_blocos * N, MPI_DOUBLE, ROOT, MPI_COMM_WORLD);
+    MPI_Scatter(vetorB, no_linha_blocos, MPI_DOUBLE, b_recv, no_linha_blocos, MPI_DOUBLE, ROOT, MPI_COMM_WORLD);
+    interacoes(x_new, x_old, x_bloc, a_recv, b_recv, no_linha_blocos, N, rank);
+
+    if (rank == ROOT)
     {
-        somaNaoDiagonalLinha = 0.0;
-        somaNaoDiagonalColuna = 0.0;
-        for (j = 0; j < N; j++)
+        tempo = MPI_Wtime() - tempo;
+        printf("\n>> Tempo de execução: %f \n\n", tempo);
+
+        solucao(N, matrizA, vetorB, x_new, rank);
+    }
+
+    MPI_Finalize();
+    return 0;
+}
+
+// Entrada dos valores na matriz
+void input(int rank, double ***matrizA, double **vetorA, double **vetorB, int N)
+{
+    int i, j;
+
+    if (rank == ROOT)
+    {
+
+        *matrizA = (double **)malloc(N * sizeof(double *));
+        *vetorB = (double *)malloc(N * sizeof(double));
+
+        
+        for (i = 0; i < N; i++)
         {
-            if (i != j)
+            (*vetorB)[i] = numRand();
+            (*matrizA)[i] = (double *)malloc(N * sizeof(double));
+
+            for (j = 0; j < N; j++)
             {
-                somaNaoDiagonalLinha += abs1(matrizA[i][j]);
-                somaNaoDiagonalColuna += abs1(matrizA[j][i]);
+                (*matrizA)[i][j] = numRand();
+
+                if (i == j){
+                    (*matrizA)[i][j] = (*matrizA)[i][j] + N * 8;
+                }
             }
-            if (matrizA[i][i] < somaNaoDiagonalLinha)
+        }
+
+        *vetorA = (double *)malloc(N * N * sizeof(double));
+
+        for (i = 0; i < N; i++)
+        {
+            #pragma omp parallel for num_threads(T)
+            for (j = 0; j < N; j++)
             {
-                flag1 = 1;
-            }
-            if (matrizA[i][i] < somaNaoDiagonalColuna)
-            {
-                flag2 = 1;
+                (*vetorA)[(i*N) + j] = (*matrizA)[i][j];
             }
         }
     }
-
-    if (flag1 && flag2)
-    {
-        printf("\n>> Não é posssível garantir a convergência da solução!\n");
-        exit(0);
-    }
-
-    return;
 }
 
-void initialise(int N)
+// Verifica número de processos com o tamanho da matriz
+void verifica(int N, int no_procs, int rank)
+{
+
+    if (N % no_procs != 0)
+    {
+        MPI_Finalize();
+        if (rank == ROOT)
+        {
+            printf(">> Erro: Número de linhas tem que ser divisível pelo número de processos!\n");
+        }
+        exit(-1);
+    }
+}
+
+// Interações do método 
+void interacoes(double *x_new, double *x_old, double *x_bloc, double *a_recv, 
+                double *b_recv, int no_linha_blocos, int N, int rank)
+{
+    int i, j, global_rows_idx, iter = 0;
+
+    #pragma omp parallel for num_threads(T)
+    for (i = 0; i < no_linha_blocos; i++)
+    {
+        x_bloc[i] = b_recv[i];
+    }
+
+    MPI_Allgather(x_bloc, no_linha_blocos, MPI_DOUBLE, x_new, no_linha_blocos, MPI_DOUBLE, MPI_COMM_WORLD);
+    
+    do
+    {
+        #pragma omp parallel for num_threads(T)
+        for (i = 0; i < N; i++)
+        {
+            x_old[i] = x_new[i];
+        }
+
+        for (i = 0; i < no_linha_blocos; i++)
+        {
+            global_rows_idx = (rank * no_linha_blocos) + i;
+            x_bloc[i] = b_recv[i];
+
+            for (j = 0; j < N; j++)
+            {
+                if (j == global_rows_idx)
+                    continue;
+                x_bloc[i] -= x_old[j] * a_recv[i * N + j];
+            }
+            x_bloc[i] /= a_recv[i * N + global_rows_idx];
+        }
+
+        // Receber todos os x_bloc de todos os processos 
+        MPI_Allgather(x_bloc, no_linha_blocos, MPI_DOUBLE, x_new, no_linha_blocos, MPI_DOUBLE, MPI_COMM_WORLD);
+        iter++;
+    } while (check(x_old, x_new, N));
+}
+
+// Verifica se chegou no critério de parada
+int check(double *x_old, double *x_new, int N)
 {
     int i = 0;
-    for (i = 0; i < N; i++)
-    {
-        varprev[i] = 0.0;
-        varcurr[i] = 0.0;
-    }
-}
+    double max1 = 0.0;
+    double max2 = 0.0;
+    double m = 0.0;
 
-void inputManual(int N)
-{
-    int i, j = 0;
     for (i = 0; i < N; i++)
     {
-        printf("\nEnter coefficients for equation %d:\n", (i + 1));
-        for (j = 0; j <= N; j++)
+        if (abs1(x_new[i] - x_old[i]) >= max1)
         {
-            if (j == N)
-            {
-                printf("\nEnter result value for equation %d:\n", (i + 1));
-                scanf("%f", &vetorB[i]);
-            }
-            else
-            {
-                scanf("%f", &matrizA[i][j]);
-            }
+            max1 = abs1((x_new[i] - x_old[i]));
+        }
+
+        if (abs1(x_new[i]) >= max2)
+        {
+            max2 = abs1((x_new[i]));
         }
     }
-}
 
-void input(int N)
-{
-    int i, j = 0;
+    m = max1 / max2;
 
-    // Não há regiões criticas, pois os acessos são individuais, logo a consistência já está garantida
-    //#pragma omp parallel for private(i) num_threads(T)
-    for (i = 0; i < N; i++)
+    if (m > 0.001)
     {
-        vetorB[i] = numRand();
+        return 1;
     }
-
-    //#pragma omp parallel for private(j) num_threads(T)
-    for (j = 0; j < N; j++)
+    else
     {
-
-        matrizA[i][j] = numRand();
-
-        if (i == j)
-        {
-            matrizA[i][j] = matrizA[i][j] + N * 8;
-        }
+        return 0;
     }
 }
 
-void preview(int N)
+// Imprimir equações
+void visualizar(int N, double **matrizA, double *vetorB,
+             double *x, int rank)
 {
-    int i, j = 0;
-    printf("\nEqução de entrada:\n");
+    int i, j;
+    printf(">> Método Iterativo de Jacobi-Richardson\n\n");
+    printf(">> Equações: \n");
     for (i = 0; i < N; i++)
     {
         for (j = 0; j <= N; j++)
@@ -142,173 +227,57 @@ void preview(int N)
         }
         printf("\n");
     }
-}
+    printf("\n");
 
-int check(int N)
-{
-    int i = 0;
-    float sum = 0.0;
-    float max1 = 0.0;
-    float max2 = 0.0;
-    float m = 0.0;
-
-    //#pragma omp parallel for private(i) reduction(max                   \
-                                              : max1) reduction(max \
-                                                                : max2)
+    printf("Solução: \n");
     for (i = 0; i < N; i++)
     {
-        if (abs1(varcurr[i] - varprev[i]) >= max1)
-        {
-            max1 = abs1((varcurr[i] - varprev[i]));
-        }
-
-        if (abs1(varcurr[i]) >= max2)
-        {
-            max2 = abs1((varcurr[i]));
-        }
-    }
-
-    m = max1 / max2;
-
-    if (m <= 0.001)
-    {
-        return 1;
-    }
-    else
-    {
-        return 0;
+        printf("x[%d] = %lf\n", i, x[i]);
     }
 }
-void show_solution(int N)
-{
-    int i = 0;
-    printf("\nSolução: \n");
-    for (i = 0; i < N; i++)
-    {
-        printf("X%d = %0.3f\n", i, varcurr[i]);
-    }
-}
-float reverse(float x)
-{
-    return x * (-1);
-}
-void solve(int N)
-{
-    int i, j, interacao = 0;
 
-    while (1)
-    {
-        for (i = 0; i < N; i++)
-        {
-            varcurr[i] = vetorB[i]; // vetor B
-            for (j = 0; j < N; j++)
-            {
-                if (i != j)
-                {
-                    varcurr[i] = varcurr[i] + reverse(matrizA[i][j] * varprev[j]);
-                }
-            }
-            varcurr[i] = varcurr[i] / matrizA[i][i];
-        }
-        if (check(N) == 1)
-        {
-            show_solution(N);
-            break;
-        }
-        else
-        {
-            for (i = 0; i < N; i++)
-                varprev[i] = varcurr[i];
-        }
-        interacao++;
-    }
-}
-void resolve(int N)
+// Verificar solução interativa
+void solucao(int N, double **matrizA, double *vetorB,
+             double *x, int rank)
 {
     int linha = 0;
     float resultado = 0.0;
 
+    printf("\n>> Escolha uma linha para resolver a equação: \n");
     while (1)
     {
-        printf("\n>> Escolha uma linha para resolver a equação: ");
         scanf("%d", &linha);
 
         if (linha <= N && linha >= 1)
             break;
+
+        printf("\n>> Escolha uma linha para resolver a equação: \n");
     }
 
     linha--;
 
-    printf(">> Cálculado pela interação: \n");
+    printf("\n>> Cálculado pela interação: \n");
     for (int j = 0; j < N; j++)
     {
-        resultado += matrizA[linha][j] * varcurr[j];
-        if (j == N - 1)
-            printf("%0.2f * %0.3f = ", matrizA[linha][j], varcurr[j]);
-        else
-            printf("%0.2f * %0.3f + ", matrizA[linha][j], varcurr[j]);
+        resultado += matrizA[linha][j] * x[j];
     }
 
-    printf("%0.4f\n", resultado);
+    printf(">> Resultado encontrado: %0.4lf\n", resultado);
 
-    printf("\n>> Resposta esperada: %0.2f\n", vetorB[linha]);
+    printf("\n>> Resposta esperada: %0.4lf\n", vetorB[linha]);
 }
-int main(int argc, char **argv)
+
+// Valores pseudoaleatória
+double numRand()
 {
-    // omp_set_nested(true);
-    int N = atoi(argv[1]);
-    // T = atoi(argv[2]);
-    // printf("T = %d N = %d", T, N);
-    printf("argc = %d", argc);
+    return ((rand() % 8) * (1.0));
+}
 
-    matrizA = (float **)calloc(N, sizeof(float *));
-
-    if (matrizA == NULL)
-    {
-        printf("** Erro: Memoria Insuficiente **");
-        exit(0);
-    }
-
-    for (int i = 0; i < N; i++)
-    {
-        matrizA[i] = (float *)calloc(N, sizeof(float));
-        if (matrizA[i] == NULL)
-        {
-            printf("** Erro: Memoria Insuficiente **");
-            exit(0);
-        }
-    }
-
-    vetorB = (float *)calloc(N, sizeof(float));
-    if (vetorB == NULL)
-    {
-        printf("** Erro: Memoria Insuficiente **");
-        exit(0);
-    }
-    varcurr = (float *)calloc(N, sizeof(float));
-    if (varcurr == NULL)
-    {
-        printf("** Erro: Memoria Insuficiente **");
-        exit(0);
-    }
-    varprev = (float *)calloc(N, sizeof(float));
-    if (varprev == NULL)
-    {
-        printf("** Erro: Memoria Insuficiente **");
-        exit(0);
-    }
-
-    // Semente para o número aleatório
-    srand(0);
-
-    printf("N = %d", N);
-
-    initialise(N);
-    input(N);
-    preview(N);
-    diagonalmenteDominante(N);
-    solve(N);
-    resolve(N);
-
-    return 0;
+// Retorna valor absoluto
+double abs1(double x)
+{
+    if (x > 0.0)
+        return x;
+    else
+        return x * (-1.0);
 }

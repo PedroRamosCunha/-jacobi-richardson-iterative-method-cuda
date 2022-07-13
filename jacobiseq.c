@@ -1,3 +1,13 @@
+//////////////////////////////////////////////////////////////////////
+//                                                                  //
+//      Trabalho 2 - SSC0903 - Computação de alto desempenho        //
+//                                                                  //
+//      10716550 - Diego da Silva Parra                             //
+//      10691971 - Mateus Fernandes Doimo                           //
+//      10892248 - Pedro Ramos Cunha                                //
+//                                                                  //
+//////////////////////////////////////////////////////////////////////
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -23,46 +33,6 @@ float abs1(float x)
         return x * (-1.0);
 }
 
-// Condição de convergência, se a matriz A for diagonalmente dominante
-void diagonalmenteDominante(int N)
-{
-
-    int i, j = 0;
-    float somaNaoDiagonalLinha, somaNaoDiagonalColuna = 0.0;
-    int flag1 = 0;
-    int flag2 = 0;
-
-    for (i = 0; i < N; i++)
-    {
-        somaNaoDiagonalLinha = 0.0;
-        somaNaoDiagonalColuna = 0.0;
-        for (j = 0; j < N; j++)
-        {
-            if (i != j)
-            {
-                somaNaoDiagonalLinha += abs1(matrizA[i][j]);
-                somaNaoDiagonalColuna += abs1(matrizA[j][i]);
-            }
-            if (matrizA[i][i] < somaNaoDiagonalLinha)
-            {
-                flag1 = 1;
-            }
-            if (matrizA[i][i] < somaNaoDiagonalColuna)
-            {
-                flag2 = 1;
-            }
-        }
-    }
-
-    if (flag1 && flag2)
-    {
-        printf("\n>> Não é posssível garantir a convergência da solução!\n");
-        exit(0);
-    }
-
-    return;
-}
-
 void initialise(int N)
 {
     int i = 0;
@@ -70,27 +40,6 @@ void initialise(int N)
     {
         varprev[i] = 0.0;
         varcurr[i] = 0.0;
-    }
-}
-
-void inputManual(int N)
-{
-    int i, j = 0;
-    for (i = 0; i < N; i++)
-    {
-        printf("\nEnter coefficients for equation %d:\n", (i + 1));
-        for (j = 0; j <= N; j++)
-        {
-            if (j == N)
-            {
-                printf("\nEnter result value for equation %d:\n", (i + 1));
-                scanf("%f", &vetorB[i]);
-            }
-            else
-            {
-                scanf("%f", &matrizA[i][j]);
-            }
-        }
     }
 }
 
@@ -117,7 +66,7 @@ void input(int N)
 void preview(int N)
 {
     int i, j = 0;
-    printf("\nEqução de entrada:\n");
+    printf("\n>> Equção de entrada:\n");
     for (i = 0; i < N; i++)
     {
         for (j = 0; j <= N; j++)
@@ -167,19 +116,22 @@ int check(int N)
         return 0;
     }
 }
-void show_solution(int N)
+
+void solucao(int N)
 {
     int i = 0;
-    printf("\nSolução: \n");
+    printf("\n>> Solução: \n");
     for (i = 0; i < N; i++)
     {
         printf("X%d = %0.3f\n", i, varcurr[i]);
     }
 }
+
 float reverse(float x)
 {
     return x * (-1);
 }
+
 void solve(int N)
 {
     int i, j, interacao = 0;
@@ -200,7 +152,6 @@ void solve(int N)
         }
         if (check(N) == 1)
         {
-            // show_solution(N);
             break;
         }
         else
@@ -211,6 +162,7 @@ void solve(int N)
         interacao++;
     }
 }
+
 void resolve(int N)
 {
     int linha = 0;
@@ -231,16 +183,13 @@ void resolve(int N)
     for (int j = 0; j < N; j++)
     {
         resultado += matrizA[linha][j] * varcurr[j];
-        // if (j == N - 1)
-        //     printf("%0.2f * %0.3f = ", matrizA[linha][j], varcurr[j]);
-        // else
-        //     printf("%0.2f * %0.3f + ", matrizA[linha][j], varcurr[j]);
     }
 
     printf(">> Resultado encontrado: %0.4f\n", resultado);
 
     printf("\n>> Resposta esperada: %0.2f\n", vetorB[linha]);
 }
+
 int main(int argc, char **argv)
 {
     double t;
@@ -286,17 +235,11 @@ int main(int argc, char **argv)
     // Semente para o número aleatório
     srand(0);
 
-    printf("N = %d", N);
-
     initialise(N);
     input(N);
-    // preview(N);
-    diagonalmenteDominante(N);
     solve(N);
     t = omp_get_wtime() - t;
+    printf("\n>> Tempo de execução: %f \n\n", t);
     resolve(N);
-
-    printf("\n Tempo de execução: %f \n", t);
-
     return 0;
 }
